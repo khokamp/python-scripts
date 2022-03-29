@@ -1,50 +1,73 @@
-# If you have results from a multiple sequence aligner (MSA) that are too big to view, i.e. thousands of files
-# then you can use this script to turn this alignment (in multi-fasta format) into a condensed format which can
-# be loaded into a spreadsheet program.
-# For each position in the alignment you will get a row in the table which indicates the most common residue
-# at that position, the number of gaps and the alternative residues (in decreasing order).
-# This script was initially developed for output from kalign but should work for any MSA results in multi-fasta format.
+# parse kalign alignment results and turn into a tab-delimited file
+# that can be loaded into a spreadsheet
+# this might also work for output from other multiple-sequence aligner provided in multi-fasta format
 #
-# Karsten Hokamp, March 2022 (kahokamp@tcd.ie)
+# Karsten Hokamp, 2022 (kahokamp@tcd.ie)
 #
 # USAGE:
-# python3 msa_result_condense.py multi_fasta_alignment_file
+# kalign_results_parser.py multi_fasta_alignment_file [reference_multi_fasta_file]
 #
-# output will be stored in multi_fasta_alignment_file.xls
+# the optional file of reference sequences allows to split the output into smaller chunks
+# for this the order of the reference sequences must be in the same order as file used for the alignment
+# output files are named after the sequence id
 
 import sys
+import os
 
 # get name of input file from the command line
-file = sys.argv[1]
+args = sys.argv[1:]
+if len(args) < 1:
+    raise Exception('Please provide the name of a file containing MSA output!')
+    
+file = args.pop(0)
 
-# try to open it
-fh = open(file, 'r')
-print(f'Reading alignments from {file}...')
+# if a second argument is given, read in set of Fasta sequences 
+# that will be used  as reference for splitting the alignment
+reference = ''
+if args :
+    reference = args.pop(0)
 
-# use input file as root for output file
-outfile = f'{file}.xls'
-fout = open(outfile, 'w')
+ref = dict()
+ref_order = list()
+ref_all = ''
+if reference :
+    with open(reference, 'r') as f:
+        for line in f:
+            if line.startswith('>') :
+                header = line.strip().replace('>', '')
+                ref_order.append(header)
+                ref[header] = 0
+            else :
+                ref[header] += len(line.strip())
+                ref_all += line.strip().upper()
+                
+# read in MSA:
+with open(file, 'r') as fh:
+    print(f'Reading alignments from {file}...')
+
+    # use input file as root for output file
+    outfile = f'{file}.xls'
+    fout = open(outfile, 'w')
 
 
-align = dict()
-seqs = dict()
-lens = dict()
-total_seqs = 0
+    align = dict()
+    seqs = dict()
+    lens = dict()
+    total_seqs = 0
 
-# read in all alignments
-# and store in dict seqs based on header
-headers = 0
-for line in fh :
-    if line.startswith('>') :
-        header = line.strip().replace('>', '')
-        headers += 1
-        seqs[header] = ''
-        total_seqs += 1
-    else :
-        seqs[header] += line.strip()
-
-fh.close()
-print(f'read {headers} sequences\nstarting the parse process...')
+    # read in all alignments
+    # and store in dict seqs based on header
+    headers = 0
+    for line in fh :
+        if line.startswith('>') :
+            header = line.strip().replace('>', '')
+            headers += 1
+            seqs[header] = ''
+            total_seqs += 1
+        else :
+            seqs[header] += line.strip().upper()
+        
+    print(f'read {headers} sequences\nstarting the parse process...')
 
 # go through each sequence and organise by position
 for seqid in seqs :
@@ -74,9 +97,11 @@ print('\nalignment lengths detected:\nlength\tsequences')
 for alen in sorted(lens.keys()) :
     print(f'{alen}\t{lens[alen]}')
 
-print(f"\nwriting output into '{outfile}'...")
+print(f"\nwriting output into '{outfile}'...\n")
 # write parsed info into output file, one line per alignment position
-fout.write('position\tmajor\tabsolute\tpercent\tgaps\tothers\n')
+fout.write('position\tconsensus\tabsolute\tpercent\tgaps\tothers\n')
+msa = ''
+msa_out = dict()
 for i in sorted(align.keys()) :
     freq = dict()
     gaps = 0
@@ -104,8 +129,102 @@ for i in sorted(align.keys()) :
         others.append(f'{other_residue} ({num})')
         
     others_out = '; '.join(others)
-    fout.write(f'{i}\t{top_residue}\t{top_num}\t{top_perc}\t{gaps}\t{others_out}\n')
+    pos = i + 1
+    fout.write(f'{pos}\t{top_residue}\t{top_num}\t{top_perc}\t{gaps}\t{others_out}\n')
+    msa_out[i] = f'{pos}\t{top_residue}\t{top_num}\t{top_perc}\t{gaps}\t{others_out}\n'
+    msa += top_residue
 
 fout.close()
 
-print('Finished!')
+if reference :
+    
+    # split output into chunks according to sequences in reference file
+    
+    outfile = f'{file}.{reference}.all'
+    with open(outfile, 'w') as fref :
+        fref.write(f'>msa\n{msa}\n>ref\n{ref_all}')
+    
+    # run kalign on reference and msa consensus to find gaps
+    kalign_ref = outfile + '.kalign'
+    msa_err = os.popen(f'kalign -i {outfile} -o {kalign_ref}').read()
+    
+    msa_kalign = dict()
+    with open(kalign_ref) as fkal :    
+        for line in fkal :
+            if line.startswith('>') :
+                header = line.strip().replace('>', '')
+                msa_kalign[header] = ''
+            else :
+                msa_kalign[header] += line.strip()
+    
+    if msa_kalign["msa"].find('-') > -1 :
+        print(f'reference has extra residues (e.g. at {msa_kalign["msa"].find("-")})')
+    if msa_kalign["ref"].find('-') > -1 :
+        print(f'MSA has extra residues (e.g. at {msa_kalign["ref"].find("-")})')
+    ref_ext = list(msa_kalign['ref'])
+    msa_ext = list(msa_kalign['msa'])
+    
+    print('\nsplitting alignment...')
+    
+    # for each reference sequence, go through each residue in the alignment and adjust length for gaps
+    i = 0
+    start = 0
+    for seqid in ref_order :
+        msa_sub = ''
+        ref_sub = ''
+        reflen = ref[seqid]
+        print(f'\n{i}: start of {seqid} ({reflen} bp)')
+        outfile = f'{file}.{seqid}.xls'
+        fout_part = open(outfile, 'w')
+        fout_part.write('pos_ref\treference\tpos_msa\tconsensus\tabsolute\tpercent\tgaps\tothers\n')
+        ref_sub_len = 0
+        gaps_ref = 0
+        msa_sub_len = 0
+        gaps_msa = 0
+        
+        end = start + reflen
+        pos = 0
+        while pos < reflen :
+
+            add_ref = ref_ext.pop(0)
+            add_msa = msa_ext.pop(0)
+            msa_sub += add_msa
+            ref_sub += add_ref            
+            
+            while add_ref == '-':
+#                pos += 1
+                gaps_ref += 1
+                fout_part.write(f'{pos}\t{add_ref}\t{msa_out[i]}')
+                i += 1
+                add_ref = ref_ext.pop(0)
+                add_msa = msa_ext.pop(0)
+                msa_sub += add_msa
+                ref_sub += add_ref
+            
+            while add_msa == '-':
+                pos += 1
+                fout_part.write(f'{pos}\t{add_ref}\n')
+                gaps_msa += 1
+#                msa_sub += '-'
+                if pos >= reflen :
+                    break
+                add_ref = ref_ext.pop(0)
+                add_msa = msa_ext.pop(0)
+                msa_sub += add_msa
+                ref_sub += add_ref
+
+            if pos >= reflen :
+                break
+
+            pos += 1
+            fout_part.write(f'{pos}\t{add_ref}\t{msa_out[i]}')
+            i += 1
+            
+
+        fout_part.close()
+        start = end
+                
+        if msa_sub != ref_sub :
+            print(f'differences between ref and msa for {seqid} (gaps in ref: {gaps_ref}, msa: {gaps_msa})\nMSA: {msa_sub}\nREF: {ref_sub}')
+
+print('\nFinished!')
