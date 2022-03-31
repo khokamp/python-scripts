@@ -14,6 +14,10 @@
 import sys
 import os
 
+# when reference is provided an aligner needs to be called
+# instead of the default (below) an aligner can be provided as third argument
+aligner = 'kalign'
+
 # get name of input file from the command line
 args = sys.argv[1:]
 if len(args) < 1:
@@ -27,6 +31,20 @@ reference = ''
 if args :
     reference = args.pop(0)
 
+# an additional argument can be used to specify an aligner tool (kalign is the default)
+if args :
+    aligner = args.pop(0)
+# make sure aligner is found
+if reference :
+    if not aligner.endswith('kalign') :
+        print('Script is set up to run with kalign - for a different aligner, please adjust the job specification further down')
+    if not os.path.isfile(aligner) :
+        aligner_location = os.popen(f'which {aligner}').read().strip()
+        if not os.path.isfile(aligner_location) :
+            raise Exception(f'The specified aligner ({aligner}) does not seem to be available on your system.')
+        else :
+            print(f'aligner found in {aligner_location}')
+                            
 ref = dict()
 ref_order = list()
 ref_all = ''
@@ -43,7 +61,7 @@ if reference :
                 
 # read in MSA:
 with open(file, 'r') as fh:
-    print(f'Reading alignments from {file}...')
+    print(f'reading alignments from {file}...')
 
     # use input file as root for output file
     outfile = f'{file}.xls'
@@ -145,11 +163,15 @@ if reference :
         fref.write(f'>msa\n{msa}\n>ref\n{ref_all}')
     
     # run kalign on reference and msa consensus to find gaps
-    kalign_ref = outfile + '.kalign'
-    msa_err = os.popen(f'kalign -i {outfile} -o {kalign_ref}').read()
-    
+    msa_ref_out = outfile + '.msa'
+    job = f'{aligner} -i "{outfile}" -o "{msa_ref_out}"'        
+    print(f'running alignment job: {job}')
+    msa_err = os.popen(job).read()
+    if not os.path.isfile(msa_ref_out) :
+        raise Exception('Something went wrong - the output of the alignment (msa consensus vs reference) could not be found in {msa_ref_out}')
+        
     msa_kalign = dict()
-    with open(kalign_ref) as fkal :    
+    with open(msa_ref_out) as fkal :    
         for line in fkal :
             if line.startswith('>') :
                 header = line.strip().replace('>', '')
@@ -158,9 +180,9 @@ if reference :
                 msa_kalign[header] += line.strip()
     
     if msa_kalign["msa"].find('-') > -1 :
-        print(f'reference has extra residues (e.g. at {msa_kalign["msa"].find("-")})')
+        print(f'\nreference has extra residues (e.g. at {msa_kalign["msa"].find("-")})')
     if msa_kalign["ref"].find('-') > -1 :
-        print(f'MSA has extra residues (e.g. at {msa_kalign["ref"].find("-")})')
+        print(f'\nMSA has extra residues (e.g. at {msa_kalign["ref"].find("-")})')
     ref_ext = list(msa_kalign['ref'])
     msa_ext = list(msa_kalign['msa'])
     
@@ -203,7 +225,7 @@ if reference :
             
             while add_msa == '-':
                 pos += 1
-                fout_part.write(f'{pos}\t{add_ref}\n')
+                fout_part.write(f'{pos}\t{add_ref}\t-\n')
                 gaps_msa += 1
 #                msa_sub += '-'
                 if pos >= reflen :
