@@ -1,15 +1,17 @@
-# parse kalign alignment results and turn into a tab-delimited file
-# that can be loaded into a spreadsheet
-# this might also work for output from other multiple-sequence aligner provided in multi-fasta format
+# parse multiple sequence alignment and turn into a tab-delimited file that can be loaded into a spreadsheet
+# this was originally developed for kalign but might also work for output from other multiple-sequence aligner provided in multi-fasta format
 #
 # Karsten Hokamp, 2022 (kahokamp@tcd.ie)
 #
 # USAGE:
-# kalign_results_parser.py multi_fasta_alignment_file [reference_multi_fasta_file]
+# msa_result_condense.py multi_fasta_alignment_file [reference_multi_fasta_file] [aligner]
 #
 # the optional file of reference sequences allows to split the output into smaller chunks
 # for this the order of the reference sequences must be in the same order as file used for the alignment
 # output files are named after the sequence id
+#
+# the optional third argument can be used to specify the aligner (kalign by default) which will be used
+# to compare the consensus sequence from the MSA to the reference sequence and identify indels
 
 import sys
 import os
@@ -37,7 +39,9 @@ if args :
 # make sure aligner is found
 if reference :
     if not aligner.endswith('kalign') :
-        print('Script is set up to run with kalign - for a different aligner, please adjust the job specification further down')
+        if not aligner.endswith('muscle') :
+            if not aligner.endswith('clustalo') :
+                print('WARNING: script is set up to run with kalign, clustalo or muscle - for a different aligner, please adjust the job specification further down')
     if not os.path.isfile(aligner) :
         aligner_location = os.popen(f'which {aligner}').read().strip()
         if not os.path.isfile(aligner_location) :
@@ -115,7 +119,7 @@ print('\nalignment lengths detected:\nlength\tsequences')
 for alen in sorted(lens.keys()) :
     print(f'{alen}\t{lens[alen]}')
 
-print(f"\nwriting output into '{outfile}'...\n")
+print(f"\nwriting output into '{outfile}'...")
 # write parsed info into output file, one line per alignment position
 fout.write('position\tconsensus\tabsolute\tpercent\tgaps\tothers\n')
 msa = ''
@@ -158,33 +162,44 @@ if reference :
     
     # split output into chunks according to sequences in reference file
     
-    outfile = f'{file}.{reference}.all'
-    with open(outfile, 'w') as fref :
+    aligner_input = f'{file}.{reference}.in'
+    with open(aligner_input, 'w') as fref :
         fref.write(f'>msa\n{msa}\n>ref\n{ref_all}')
+    print(f"\nwrote consensus sequence from MSA and reference into '{aligner_input}'")
     
-    # run kalign on reference and msa consensus to find gaps
-    msa_ref_out = outfile + '.msa'
-    job = f'{aligner} -i "{outfile}" -o "{msa_ref_out}"'        
-    print(f'running alignment job: {job}')
+    # run aligner on reference and msa consensus to find gaps
+    # use basename of aligner in output file
+    parts = aligner.split('/')
+    msa_ref_out = aligner_input + '.' + parts[-1]
+    print(f"\nstoring alignment in '{msa_ref_out}'")
+    
+    # command line options for kalign and clustalo:
+    job = f'{aligner} -i "{aligner_input}" -o "{msa_ref_out}"'        
+    
+    if aligner.endswith('muscle') :
+        # command line options for muscle:
+        job = f'{aligner} -in "{aligner_input}" -out "{msa_ref_out}"'
+        
+    print(f'\nrunning alignment job: {job}')
     msa_err = os.popen(job).read()
     if not os.path.isfile(msa_ref_out) :
-        raise Exception('Something went wrong - the output of the alignment (msa consensus vs reference) could not be found in {msa_ref_out}')
+        raise Exception("Something went wrong - the output of the alignment (msa consensus vs reference) could not be found in '{msa_ref_out}'")
         
-    msa_kalign = dict()
+    msa_vs_ref = dict()
     with open(msa_ref_out) as fkal :    
         for line in fkal :
             if line.startswith('>') :
                 header = line.strip().replace('>', '')
-                msa_kalign[header] = ''
+                msa_vs_ref[header] = ''
             else :
-                msa_kalign[header] += line.strip()
+                msa_vs_ref[header] += line.strip()
     
-    if msa_kalign["msa"].find('-') > -1 :
-        print(f'\nreference has extra residues (e.g. at {msa_kalign["msa"].find("-")})')
-    if msa_kalign["ref"].find('-') > -1 :
-        print(f'\nMSA has extra residues (e.g. at {msa_kalign["ref"].find("-")})')
-    ref_ext = list(msa_kalign['ref'])
-    msa_ext = list(msa_kalign['msa'])
+    if msa_vs_ref["msa"].find('-') > -1 :
+        print(f'\nreference has extra residues (e.g. at position {msa_vs_ref["msa"].find("-")})')
+    if msa_vs_ref["ref"].find('-') > -1 :
+        print(f'\nMSA has extra residues (e.g. at position {msa_vs_ref["ref"].find("-")})')
+    ref_ext = list(msa_vs_ref['ref'])
+    msa_ext = list(msa_vs_ref['msa'])
     
     print('\nsplitting alignment...')
     
@@ -247,6 +262,20 @@ if reference :
         start = end
                 
         if msa_sub != ref_sub :
-            print(f'differences between ref and msa for {seqid} (gaps in ref: {gaps_ref}, msa: {gaps_msa})\nMSA: {msa_sub}\nREF: {ref_sub}')
+            identity = ''
+            mismatches = 0
+            for j in range(len(msa_sub)) :
+                compare = '|'
+                if msa_sub[j] != ref_sub[j] :
+                    compare = '.'
+                    if msa_sub[j] == '-' or ref_sub[j] == '-' :
+                        compare = '-'
+                    else :
+                        mismatches += 1
+                        
+                identity += compare
+                
+            print(f'differences found between ref and msa for {seqid} (gaps in ref: {gaps_ref}, gaps in msa: {gaps_msa}, mismatches: {mismatches})\nMSA: {msa_sub}\nREF: {ref_sub}\nCMP: {identity}')
 
 print('\nFinished!')
+
