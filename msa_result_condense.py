@@ -203,6 +203,9 @@ if reference :
     
     print('\nsplitting alignment...')
     
+    # collect the consensus string for the reference sequences and write to a file
+    msa_consensus = dict()
+    
     # for each reference sequence, go through each residue in the alignment and adjust length for gaps
     i = 0
     start = 0
@@ -260,7 +263,10 @@ if reference :
 
         fout_part.close()
         start = end
-                
+               
+        # collect MSA consensus (minus the dashes)
+        msa_consensus[seqid] = msa_sub.replace('-', '')
+
         if msa_sub != ref_sub :
             identity = ''
             mismatches = 0
@@ -277,5 +283,10 @@ if reference :
                 
             print(f'differences found between ref and msa for {seqid} (gaps in ref: {gaps_ref}, gaps in msa: {gaps_msa}, mismatches: {mismatches})\nMSA: {msa_sub}\nREF: {ref_sub}\nCMP: {identity}')
 
+    # write out consensus sequences
+    msa_consensus_out = reference + '.msa'
+    with open(msa_consensus_out, 'w') as msac :    
+        for seqid in ref_order :
+            msac.write(f'>{seqid}\n{msa_consensus[seqid]}\n')
+            
 print('\nFinished!')
-
