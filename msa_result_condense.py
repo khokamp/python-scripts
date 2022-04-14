@@ -20,7 +20,7 @@ import os
 # instead of the default (below) an aligner can be provided as third argument
 aligner = 'kalign'
 
-# get name of input file from the command line
+# get name of file containing MSA from the command line
 args = sys.argv[1:]
 if len(args) < 1:
     raise Exception('Please provide the name of a file containing MSA output!')
@@ -161,7 +161,14 @@ fout.close()
 if reference :
     
     # split output into chunks according to sequences in reference file
+    # additionally, generate a fasta file with the consensus MSA sequences split according to the reference
+    # and generate split MSAs according to reference
     
+    # turn MSA sequences into lists
+    seqs_list = dict()
+    for msa_id in seqs.keys() :
+        seqs_list[msa_id] = list(seqs[msa_id])
+        
     aligner_input = f'{file}.{reference}.in'
     with open(aligner_input, 'w') as fref :
         fref.write(f'>msa\n{msa}\n>ref\n{ref_all}')
@@ -210,6 +217,12 @@ if reference :
     i = 0
     start = 0
     for seqid in ref_order :
+        
+        # initialise dict for split msa
+        msa_split_out = dict() 
+        for msa_id in seqs_list.keys() :
+            msa_split_out[msa_id] = ''
+            
         msa_sub = ''
         ref_sub = ''
         reflen = ref[seqid]
@@ -240,6 +253,10 @@ if reference :
                 add_msa = msa_ext.pop(0)
                 msa_sub += add_msa
                 ref_sub += add_ref
+                
+                # collect residues from each MSA sequence for split MSA output
+                for msa_id in seqs_list.keys() :
+                    msa_split_out[msa_id] += seqs_list[msa_id].pop(0)
             
             while add_msa == '-':
                 pos += 1
@@ -259,14 +276,25 @@ if reference :
             pos += 1
             fout_part.write(f'{pos}\t{add_ref}\t{msa_out[i]}')
             i += 1
-            
+                
+            # collect residues from each MSA sequence for split MSA output
+            for msa_id in seqs_list.keys() :
+                msa_split_out[msa_id] += seqs_list[msa_id].pop(0)
+           
 
         fout_part.close()
         start = end
                
+        # write split MSA for this reference sequence
+        msa_split_file = file + '.' + seqid + '.msa'
+        with open(msa_split_file, 'w') as msas :
+            for msa_id in sorted(msa_split_out.keys()) :
+                msas.write(f'>{msa_id}\n{msa_split_out[msa_id]}\n')
+
         # collect MSA consensus (minus the dashes)
         msa_consensus[seqid] = msa_sub.replace('-', '')
 
+        # provide additional information about differences in consensus and reference sequence
         if msa_sub != ref_sub :
             identity = ''
             mismatches = 0
@@ -283,10 +311,16 @@ if reference :
                 
             print(f'differences found between ref and msa for {seqid} (gaps in ref: {gaps_ref}, gaps in msa: {gaps_msa}, mismatches: {mismatches})\nMSA: {msa_sub}\nREF: {ref_sub}\nCMP: {identity}')
 
+                    
     # write out consensus sequences
     msa_consensus_out = reference + '.msa'
     with open(msa_consensus_out, 'w') as msac :    
         for seqid in ref_order :
             msac.write(f'>{seqid}\n{msa_consensus[seqid]}\n')
             
+    print(f'\nConsensus of MSA for each reference has been written to {msa_consensus_out}')    
+    print(f'\nMSA split by each reference sequence have been stored in {file} + <seqID>.msa')    
+    print(f'\nCondensed format for each reference sequence can be found in {file} + <seqID>.xls\n')    
+            
 print('\nFinished!')
+
